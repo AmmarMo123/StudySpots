@@ -3,7 +3,6 @@ import { useState, useEffect, useRef } from 'react';
 import styles from './styles/HomePage.module.css';
 import Header from './components/Header';
 import LoadingIndicator from './components/LoadingIndicator';
-import FetchButton from './components/FetchButton';
 import mapboxgl from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 
@@ -28,23 +27,26 @@ interface Building {
     building_status: string;
     rooms: { [key: string]: Room };
     coords: [number, number];
+    location: [number, number];
     distance: number;
     type: "lecture_hall" | "cafe" | "library";
     slots?: Slot[];
 }
 
 export default function HomePage() {
-    const [connectionStatus, setConnectionStatus] = useState<string | null>("Connected");
+    //const [connectionStatus, setConnectionStatus] = useState<string | null>("Connected");
     const [studySpots, setStudySpots] = useState<Building[]>([]);
     const [currentTime, setCurrentTime] = useState<string>("");
-    const [openBuildingIndex, setOpenBuildingIndex] = useState<number | null>(null);
+    const [openBuildingIndex, setOpenBuildingIndex] = useState<string | null>(null); // Use building ID instead of index
     const [dataLoaded, setDataLoaded] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
     const [userLocation, setUserLocation] = useState<{ latitude: number | null, longitude: number | null }>({ latitude: null, longitude: null });
     const mapContainerRef = useRef<HTMLDivElement | null>(null); // Reference for the map container
     const mapRef = useRef<mapboxgl.Map | null>(null); // Store map instacne
-    const markersRef = useRef<mapboxgl.Marker[]>([]); // Track active markers 
+    const [openBuildingId, setOpenBuildingId] = useState<string | null>(null); // Store building_code instead of index
 
+    //const markersRef = useRef<mapboxgl.Marker[]>([]); // Track active markers 
+    console.log(currentTime)
     // Function to check if current time is within a slot's time range
     const isAvailable = (startTime: string, endTime: string): boolean => {
         const currentTimeInMinutes = getCurrentTimeInMinutes();
@@ -128,12 +130,12 @@ export default function HomePage() {
     const getMarkerClass = (status: string): string => {
         switch (status) {
             case "Available":
-                return "h-3 w-3 rounded-full bg-green-500 shadow-[0px_0px_4px_2px_rgba(34,197,94,0.7)]";// Green marker
+                return "h-3 w-3 rounded-full bg-green-500 shadow-[0px_0px_4px_2px_rgba(34,197,94,0.7)] cursor-pointer";// Green marker
             case "Opening Soon":
-                return "h-3 w-3 rounded-full bg-amber-400 shadow-[0px_0px_4px_2px_rgba(245,158,11,0.9)]"; // Amber marker
+                return "h-3 w-3 rounded-full bg-amber-400 shadow-[0px_0px_4px_2px_rgba(245,158,11,0.9)] cursor-pointer"; // Amber marker
             case "Unavailable":
             default:
-                return "h-3 w-3 rounded-full bg-red-500 shadow-[0px_0px_4px_2px_rgba(239,68,68,0.9)]"; // Red marker
+                return "h-3 w-3 rounded-full bg-red-500 shadow-[0px_0px_4px_2px_rgba(239,68,68,0.9)] cursor-pointer"; // Red marker
         }
     };
 
@@ -189,7 +191,8 @@ export default function HomePage() {
             container: mapContainerRef.current as HTMLElement,
             style: "mapbox://styles/mapbox/standard",
             center: [-79.503471, 43.772861], // Default to YorkU location if no user location
-            zoom: 14,
+            zoom: 16.5,
+            pitch: 60,
         });
 
         // Add user location marker
@@ -215,28 +218,41 @@ export default function HomePage() {
                     // Create marker element
                     const markerElement = document.createElement("div");
                     markerElement.className = `marker ${markerClass}`;
+                    console.log("Marker element created:", markerElement);
 
                     // Add a click event to the marker
                     markerElement.addEventListener("click", () => {
-                        // Trigger dropdown for the corresponding building
-                        const accordionItem = document.getElementById(building.building_code);
-                        if (accordionItem) {
-                            console.log("Found accordion item:", accordionItem);
-                            accordionItem.scrollIntoView({ behavior: "smooth", block: "start" });
-                            if ("open" in accordionItem) {
-                                accordionItem.open = true; // Open the dropdown (if it’s a <details>)
-                            } else {
-                                accordionItem.classList.add("open"); // Add an open class
-                            }
-                        } else {
-                            console.warn('Accordion item for ${building.building_code} not found.')
+                        console.log("Marker clicked:", building);
+
+                        // Use handleToggleBuilding to toggle the accordion
+                        handleToggleBuilding(building.location.join(", ")); // Pass the unique building ID
+
+                        // Get the lecture halls section <details> element
+                        const lectureHallsSection = document.querySelector(`.${styles.section}`) as HTMLDetailsElement;
+                        if (lectureHallsSection && !lectureHallsSection.open) {
+                            // Open the lecture halls section if it is collapsed
+                            lectureHallsSection.open = true;
                         }
-                    })
+
+                        // Scroll to the corresponding accordion item
+                        const accordionItem = document.getElementById(building.location.join(", "));
+                        if (accordionItem) {
+                            setTimeout(() => {
+                                accordionItem.scrollIntoView({ behavior: "smooth", block: "start" });
+                            }, 100); // Delay by 100ms
+                        } else {
+                            console.warn(`Accordion item for ${building.location.join(", ")} not found.`);
+                        }
+                    });
 
                     // Add the marker to the map
-                    new mapboxgl.Marker(markerElement)
-                        .setLngLat([lng, lat])
-                        .addTo(mapRef.current);
+                    if (mapRef.current) {
+                        new mapboxgl.Marker({element: markerElement,})
+                            .setLngLat([lng, lat])
+                            .addTo(mapRef.current); // Safe usage
+                    } else {
+                        console.error("Map reference is not initialized.");
+                    }
                 } else {
                     console.error(`Invalid coordinates for building: ${building.building}`, building.coords);
 
@@ -247,18 +263,20 @@ export default function HomePage() {
         });
 
         return () => {
-            mapRef.current.remove();
+            if (mapRef.current) {
+                mapRef.current.remove(); // Only call if mapRef.current is not null
+            }
         };
     }, [studySpots, userLocation]);
 
     const handleFetchStudySpots = async () => {
         try {
             setIsLoading(true); // Set loading to true when fetch starts
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_BASE_URL}/api/study-spots`);
+            const response = await fetch(`https://studyspotsbackend.vercel.app/api/study-spots`);
             if (!response.ok) throw new Error(`HTTP error! Status: ${response.status}`);
             const data = await response.json();
             
-            const transformedData = data.map((building) => {
+            const transformedData = data.map((building: Building) => {
                 let buildingStatus = "Unavailable"; // Default status
                 let hasAvailable = false;
                 let hasOpeningSoon = false;
@@ -312,9 +330,12 @@ export default function HomePage() {
             setIsLoading(false); // Set loading to false after fetch completes (success or error)
         }
     };
-
-    const handleToggleBuilding = (index: number) => {
-        setOpenBuildingIndex(prevIndex => (prevIndex === index ? null : index));
+    const handleToggleBuilding = (id: string) => {
+        console.log("Toggling ID:", id); // Debugging
+        setOpenBuildingIndex((prevId) => {
+            console.log("Previous ID:", prevId); // Debugging
+            return prevId === id ? null : id;
+        });
     };
 
     const groupByType = (spots: StudySpot[]) => {
@@ -342,15 +363,15 @@ export default function HomePage() {
         });
         console.log("Sort success.")
     }
+    
+    // Automatically fetch data on component mount
+    useEffect(() => {
+        handleFetchStudySpots();
+    }, []);
     return (
         <div className={styles.container}>
             {/* Header component */}
             <Header />
-
-            {/* Button component */}
-            {!dataLoaded && !isLoading && (
-                <FetchButton onClick={handleFetchStudySpots} />
-            )}
 
             {/* Loading component */}
             {isLoading && <LoadingIndicator />}
@@ -394,12 +415,12 @@ export default function HomePage() {
 
                                     return (
                                         /* Render details for each building with collapsible behavior */
-                                        <details key={index} className={styles.building} open={openBuildingIndex === index}>
+                                        <details key={index} className={styles.building} open={openBuildingIndex === building.location.join(", ")} id={building.location.join(", ")}>
                                             <summary
                                                 className={styles.buildingSummary}
                                                 onClick={(e) => {
                                                     e.preventDefault();
-                                                    handleToggleBuilding(index); // Handle toggling of the building details
+                                                    handleToggleBuilding(building.location.join(", ")); // Handle toggling of the building details
                                                 }}
                                             >
                                                 <span className={styles.buildingName}>
